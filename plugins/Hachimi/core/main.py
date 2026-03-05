@@ -1,0 +1,82 @@
+from ncatbot.plugin_system import NcatBotPlugin
+from ncatbot.plugin_system import command_registry,group_filter,admin_filter
+from ncatbot.core.event import BaseMessageEvent
+from ncatbot.core import GroupMessage, PrivateMessage
+
+from ..database.db import Database
+from ..signin import roulette_signin
+from ..sgs import sgs_news
+from ..ddns import ddns_manager
+
+class Hachimi(NcatBotPlugin):
+    name = "Hachimi"
+    version = "0.0.2"
+    author = "梦中云"
+    description = "这是一只不可爱的小猫咪"
+
+    async def on_load(self):
+        try:
+            # Initialize database tables
+            await Database.init_tables()
+        except Exception as e:
+            print(f"Database initialization failed: {e}")
+
+        self.add_scheduled_task(sgs_news.check_and_push_news, "sgs_news", "10m")
+        self.add_scheduled_task(ddns_manager.run_ddns_task, "update_ddns", "1h")
+
+    @command_registry.command("轮盘签到", description="签到获取金币")
+    async def Hachimi_signin(self, event: BaseMessageEvent):
+        text = await roulette_signin.handle_roulette_signin(event.sender.user_id, event.sender.nickname)
+        await event.reply(text)
+        return
+
+    @command_registry.command("我的金币", description="查询当前金币数量")
+    async def Hachimi_getcoin(self, event: BaseMessageEvent):
+        text = await roulette_signin.handle_get_coin(event.sender.user_id)
+        await event.reply(text)
+        return
+
+    @group_filter
+    @command_registry.command("金币排行", description="查询当前金币排行榜")
+    async def Hachimi_getcoinrank(self, event: GroupMessage):
+        # 获取群成员列表
+        res = await self.api.get_group_member_list(group_id=event.group_id)
+        # 转化列表格式
+        member_ids = [str(m.user_id) for m in res.members]
+
+        if member_ids:
+            text = await roulette_signin.handle_get_coin_rank(member_ids)
+        else:
+            text = "获取群成员列表失败"
+
+        await event.reply(text)
+        return
+
+    @admin_filter
+    @group_filter   
+    @command_registry.command("开启三国杀推送", description="三国杀公告推送")
+    async def Hachimi_opensgsnews(self, event: GroupMessage):
+        text = await sgs_news.handle_sgs_command(True,event.group_id)
+        await event.reply(text)
+        return
+
+    @admin_filter
+    @group_filter   
+    @command_registry.command("关闭三国杀推送", description="关闭三国杀公告推送")
+    async def Hachimi_closesgsnews(self, event: GroupMessage):
+        text = await sgs_news.handle_sgs_command(False,event.group_id)
+        await event.reply(text)
+        return
+
+    @command_registry.command("公告", description="获取最新三国杀公告")
+    async def Hachimi_getnews(self, event: BaseMessageEvent):
+        text = await sgs_news.handle_get_news()
+        await event.reply(text)
+        return
+
+    @admin_filter
+    @command_registry.command("DDNS", description="手动触发DDNS更新")
+    async def Hachimi_ddns_update(self, event: BaseMessageEvent):
+        text = await ddns_manager.run_ddns_task()
+        await event.reply(text)
+        return
