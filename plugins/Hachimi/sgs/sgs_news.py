@@ -1,5 +1,5 @@
 import asyncio
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 import re
 
@@ -28,8 +28,17 @@ async def fetch_latest_news():
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
         loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, lambda: requests.get(SGS_NEWS_URL, headers=headers))
-        response.encoding = 'utf-8'
+        # 优化：使用 aiohttp 替代 requests 和 run_in_executor
+        async with aiohttp.ClientSession() as session:
+            async with session.get(SGS_NEWS_URL, headers=headers) as response:
+                if response.status != 200:
+                    print(f"Failed to fetch news, status code: {response.status}")
+                    return None
+                
+                # 指定 utf-8 编码读取 HTML
+                #html_text = await response.text(encoding='utf-8')
+        # response = await loop.run_in_executor(None, lambda: requests.get(SGS_NEWS_URL, headers=headers))
+        # response.encoding = 'utf-8'
         
         soup = BeautifulSoup(response.text, 'html.parser')
         news_list = soup.find('ul', class_='press-list')

@@ -1,7 +1,7 @@
 from ncatbot.core import BotClient, GroupMessage, PrivateMessage
-from ncatbot.utils import get_log
+from ncatbot.utils import get_log,ncatbot_config
 
-from config import BOT_CONFIG
+
 
 bot = BotClient()
 _log = get_log()
@@ -37,9 +37,8 @@ async def on_private_message(msg: PrivateMessage):
     await msg.reply(menu_text)
 
 def main():
-    bot.run_frontend(
-        **BOT_CONFIG
-    )
+    ncatbot_config.update_from_file("config.yaml")
+    bot.run_frontend()
 
 if __name__ == "__main__":
     main()

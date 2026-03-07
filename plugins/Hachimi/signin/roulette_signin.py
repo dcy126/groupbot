@@ -28,8 +28,8 @@ async def handle_roulette_signin(user_id: str, user_name: str):
                 signin_num = 0
 
             # 随机生成金币 (例如 1 到 100)
-            random_1=random.random()
-            random_2=random.random()
+            random_1=1.0-random.random()
+            random_2=1.0-random.random()
             variance=math.sqrt(-2*math.log(random_1))*math.cos(2*math.pi*random_2)
             if variance>=0:
                 normal=64+10*variance
