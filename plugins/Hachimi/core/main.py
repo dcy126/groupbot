@@ -123,19 +123,6 @@ class Hachimi(NcatBotPlugin):
         if msg:
             await event.reply(msg)
 
-    @group_filter
-    @command_registry.command("结算", description="超时强制结算胜负")
-    async def russian_settlement(self, event: GroupMessage):
-        group_id = str(event.group_id)
-        if group_id in russian_manager._current_player and russian_manager._current_player[group_id].get(2) != 0:
-            import time
-            if time.time() - russian_manager._current_player[group_id]["time"] > 30:
-                await event.reply("决斗已超时，强行结算...")
-                await russian_manager.end_game(event, is_timeout=True)
-            else:
-                await event.reply("决斗尚未超时，不能强行结算！")
-        else:
-            await event.reply("当前没有可结算的对决。")
 
     @group_filter
     @command_registry.command("我的战绩", description="查看俄罗斯轮盘战绩")

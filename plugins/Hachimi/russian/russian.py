@@ -54,32 +54,30 @@ class RussianManager:
         try:
             await asyncio.sleep(self.timeout)
             group_id = str(event.group_id)
-            # 倒计时结束，检查游戏是否仍在进行
-            if group_id in self._current_player and self._current_player[group_id].get(1) != 0:
+            current_game = self._current_player.get(group_id, {})
+            # 倒计时结束，检查游戏是否仍在进行（发起人和接受人都存在）
+            if current_game.get(1) and current_game.get(2):
                 await event.reply("⏳ 决斗已超时，系统自动强行结算...")
                 await self.end_game(event, is_timeout=True)
         except asyncio.CancelledError:
-            # 任务被手动取消（玩家在超时前操作了），正常退出不报错
             pass
 
     def _cancel_timeout_task(self, group_id: str):
         """取消当前群聊的超时结算任务"""
-        if group_id in self._current_player:
-            task = self._current_player[group_id].get("timeout_task")
-            if task and not task.done():
-                task.cancel()
+        current_game = self._current_player.get(group_id, {})
+        task = current_game.get("timeout_task")
+        if task and not task.done():
+            task.cancel()
 
     def _start_timeout_task(self, event: GroupMessage):
         """重新启动超时结算任务"""
         group_id = str(event.group_id)
-        # 每次启动新任务前，先停掉旧的（重置倒计时）
         self._cancel_timeout_task(group_id)
-        # 创建新的后台倒计时任务
         task = asyncio.create_task(self._auto_settle_task(event))
-        self._current_player[group_id]["timeout_task"] = task
+        if group_id in self._current_player:
+            self._current_player[group_id]["timeout_task"] = task
     # ====================================================
 
-    # 与你的 PostgreSQL 数据库对接的桥梁函数
     async def get_db_coins(self, user_id: str) -> int:
         row = await UserDao.get_user_coins(user_id)
         return row['coins'] if row else 0
@@ -127,8 +125,10 @@ class RussianManager:
         
         self._init_player_data(group_id, user_id, player1_name)
         
-        if group_id in self._current_player and self._current_player[group_id].get(1) != 0:
-            if datetime.datetime.now().timestamp() - self._current_player[group_id]["last_active_time"] <= self.timeout:
+        # 修复：使用更严谨的字典读取方式
+        current_game = self._current_player.get(group_id, {})
+        if current_game.get(1):
+            if datetime.datetime.now().timestamp() - current_game.get("last_active_time", 0) <= self.timeout:
                 return "决斗已开始，请等待上一场结束！"
                 
         user_money = await self.get_db_coins(user_id)
@@ -150,7 +150,7 @@ class RussianManager:
             "null_bullet_num": 7 - bullet_num,
             "index": 0,
             "last_active_time": datetime.datetime.now().timestamp(),
-            "timeout_task": None # 占位
+            "timeout_task": None
         }
         
         msg = f"咔 " * bullet_num + f"，装填完毕\n挑战金额：{money}\n第一枪的概率为：{str(float(bullet_num) / 7.0 * 100)[:5]}%\n"
@@ -158,9 +158,6 @@ class RussianManager:
             msg += f"{player1_name} 向 [CQ:at,qq={at_qq}] 发起了决斗！请在{self.timeout}秒内回复‘接受对决’或‘拒绝对决’！"
         else:
             msg += f"若{self.timeout}秒内无人接受挑战则对决作废。"
-            
-        # 启动自动结算倒计时
-        self._start_timeout_task(event)
         
         return msg
 
@@ -170,54 +167,56 @@ class RussianManager:
         nickname = event.sender.nickname
         self._init_player_data(group_id, user_id, nickname)
         
-        if group_id not in self._current_player or self._current_player[group_id].get(1) == 0:
+        # 修复：防止空字典导致的异常
+        current_game = self._current_player.get(group_id, {})
+        if not current_game.get(1):
             return "目前没有发起的对决，速速装弹！"
-        if self._current_player[group_id][2] != 0:
+        if current_game.get(2):
             return "你已经身处决斗中，或已有人接受对决！"
-        if self._current_player[group_id][1] == user_id:
+        if current_game.get(1) == user_id:
             return "请不要自己枪毙自己！换人来接受对决..."
-        if self._current_player[group_id].get("at") and self._current_player[group_id]["at"] != user_id:
+        if current_game.get("at") and current_game.get("at") != user_id:
             return f"这场对决是邀请别人的，不要捣乱！"
             
-        if datetime.datetime.now().timestamp() - self._current_player[group_id]["last_active_time"] > self.timeout:
+        if datetime.datetime.now().timestamp() - current_game.get("last_active_time", 0) > self.timeout:
             self._cancel_timeout_task(group_id)
             self._current_player[group_id] = {}
             return "对决邀请已过时，请重新发起..."
 
         user_money = await self.get_db_coins(user_id)
-        if user_money < self._current_player[group_id]["money"]:
+        if user_money < current_game.get("money", 0):
             return "你的金币不足以接受这场对决！"
 
         self._current_player[group_id][2] = user_id
         self._current_player[group_id]["player2"] = nickname
         self._current_player[group_id]["last_active_time"] = datetime.datetime.now().timestamp()
 
-        # 玩家成功接受，刷新倒计时，留给先手玩家开枪
+        # 玩家成功接受后，正式开始真正的倒计时
         self._start_timeout_task(event)
 
-        return f"{nickname}接受了对决！\n请[CQ:at,qq={self._current_player[group_id][1]}]先开枪！"
+        return f"{nickname}接受了对决！\n请[CQ:at,qq={self._current_player[group_id][1]}]在{self.timeout}秒内先开枪！"
 
     async def shot(self, event: GroupMessage, count: int = 1) -> str:
         group_id = str(event.group_id)
         user_id = str(event.sender.user_id)
         
-        if group_id not in self._current_player or self._current_player[group_id].get(1) == 0:
+        current_game = self._current_player.get(group_id, {})
+        if not current_game.get(1):
             return "目前没有对决，请先发送 装弹！"
-        if self._current_player[group_id][2] == 0:
+        if not current_game.get(2):
             return "请等待勇士接受对决..."
             
-        if datetime.datetime.now().timestamp() - self._current_player[group_id]["last_active_time"] > self.timeout:
-            # 这里如果已经被系统的 _auto_settle_task 抢先结算了，这句其实就不会触发了，多做一层兜底
+        if datetime.datetime.now().timestamp() - current_game.get("last_active_time", 0) > self.timeout:
             return "决斗已超时..."
             
-        if self._current_player[group_id]["next"] != user_id:
+        if current_game.get("next") != user_id:
             return "你的左轮不是连发的！该对方开枪了！"
 
-        player1_name = self._current_player[group_id]["player1"]
-        player2_name = self._current_player[group_id]["player2"]
-        current_index = self._current_player[group_id]["index"]
+        player1_name = current_game.get("player1")
+        player2_name = current_game.get("player2")
+        current_index = current_game.get("index", 0)
         
-        _tmp = self._current_player[group_id]["bullet"][current_index : current_index + count]
+        _tmp = current_game.get("bullet", [])[current_index : current_index + count]
         
         if 1 in _tmp:
             flag = _tmp.index(1) + 1
@@ -226,43 +225,45 @@ class RussianManager:
             await self.end_game(event, is_timeout=False)
             return None
         else:
-            next_user_id = self._current_player[group_id][1] if user_id == self._current_player[group_id][2] else self._current_player[group_id][2]
+            next_user_id = current_game.get(1) if user_id == current_game.get(2) else current_game.get(2)
             self._current_player[group_id]["null_bullet_num"] -= count
             self._current_player[group_id]["next"] = next_user_id
             self._current_player[group_id]["last_active_time"] = datetime.datetime.now().timestamp()
             self._current_player[group_id]["index"] += count
             
-            # 玩家开枪没死，刷新倒计时，把定时器交接给下一个人
+            # 玩家开枪没死，重新开始计时！把定时器交接给下一个人
             self._start_timeout_task(event)
             
-            x = str(float(self._current_player[group_id]["bullet_num"]) / float(self._current_player[group_id]["null_bullet_num"] + self._current_player[group_id]["bullet_num"]) * 100)[:5]
-            return f"呼呼，没有爆裂的声响，你活了下来\n下一枪中弹的概率：{x}%\n轮到 [CQ:at,qq={next_user_id}] 了"
+            x = str(float(current_game.get("bullet_num")) / float(current_game.get("null_bullet_num") + current_game.get("bullet_num")) * 100)[:5]
+            
+            return f"呼呼，没有爆裂的声响，你活了下来\n下一枪中弹的概率：{x}%\n轮到 [CQ:at,qq={next_user_id}] 了！(请在{self.timeout}秒内开枪)"
 
     async def end_game(self, event: GroupMessage, is_timeout=False):
         group_id = str(event.group_id)
-        if group_id not in self._current_player or self._current_player[group_id].get(1) == 0:
+        current_game = self._current_player.get(group_id, {})
+        
+        if not current_game.get(1):
             return
             
-        # 结算前一定要先停掉潜在的倒计时任务（防止赢了以后突然又超时结算一次）
+        # 结算前一定要先停掉潜在的倒计时任务
         self._cancel_timeout_task(group_id)
             
-        # 如果只有发起人没有接受人（即发起后30秒无人迎战），则游戏直接作废
-        if self._current_player[group_id].get(2) == 0:
+        # 安全防抖：如果在还没人接受的情况下进到这里，直接静默清理
+        if not current_game.get(2):
             self._current_player[group_id] = {}
-            await event.reply("这场对决邀请已经超时作废。")
             return
             
         if is_timeout:
-            win_user_id = self._current_player[group_id]["next"]
-            lose_user_id = self._current_player[group_id][1] if win_user_id == self._current_player[group_id][2] else self._current_player[group_id][2]
+            win_user_id = current_game.get("next")
+            lose_user_id = current_game.get(1) if win_user_id == current_game.get(2) else current_game.get(2)
         else:
-            lose_user_id = self._current_player[group_id]["next"]
-            win_user_id = self._current_player[group_id][1] if lose_user_id == self._current_player[group_id][2] else self._current_player[group_id][2]
+            lose_user_id = current_game.get("next")
+            win_user_id = current_game.get(1) if lose_user_id == current_game.get(2) else current_game.get(2)
 
-        win_name = self._current_player[group_id]["player1"] if win_user_id == self._current_player[group_id][1] else self._current_player[group_id]["player2"]
-        lose_name = self._current_player[group_id]["player2"] if win_user_id == self._current_player[group_id][1] else self._current_player[group_id]["player1"]
+        win_name = current_game.get("player1") if win_user_id == current_game.get(1) else current_game.get("player2")
+        lose_name = current_game.get("player2") if win_user_id == current_game.get(1) else current_game.get("player1")
         
-        gold = self._current_player[group_id]["money"]
+        gold = current_game.get("money", 0)
         rand = random.randint(0, 5)
         fee = max(int(gold * float(rand) / 100), 1) if rand != 0 else 0
         
@@ -280,7 +281,7 @@ class RussianManager:
         win_user = self._player_data[group_id][win_user_id]
         lose_user = self._player_data[group_id][lose_user_id]
         
-        bullet_str = "".join(["__ " if x == 0 else "| " for x in self._current_player[group_id]["bullet"]])
+        bullet_str = "".join(["__ " if x == 0 else "| " for x in current_game.get("bullet", [])])
         self._current_player[group_id] = {}
         
         await event.reply(
