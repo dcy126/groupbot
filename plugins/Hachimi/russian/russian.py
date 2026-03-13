@@ -6,7 +6,7 @@ import json
 import datetime
 from pathlib import Path
 from ncatbot.core import GroupMessage
-
+from ncatbot.utils import status
 # 引入你现有的数据库操作类
 from ..database.dao import UserDao
 
@@ -49,16 +49,14 @@ class RussianManager:
             }
 
     # ================= 自动超时控制核心 =================
-    async def _auto_settle_task(self, event: GroupMessage):
+    async def _auto_settle_task(self, group_id: str):
         """后台倒计时任务，到达时间后自动结算"""
         try:
             await asyncio.sleep(self.timeout)
-            group_id = str(event.group_id)
             current_game = self._current_player.get(group_id, {})
             # 倒计时结束，检查游戏是否仍在进行（发起人和接受人都存在）
             if current_game.get(1) and current_game.get(2):
-                await event.reply("⏳ 决斗已超时，系统自动强行结算...")
-                await self.end_game(event, is_timeout=True)
+                await self.end_game(group_id, is_timeout=True)
         except asyncio.CancelledError:
             pass
 
@@ -69,11 +67,11 @@ class RussianManager:
         if task and not task.done():
             task.cancel()
 
-    def _start_timeout_task(self, event: GroupMessage):
+    def _start_timeout_task(self, group_id: str):
         """重新启动超时结算任务"""
-        group_id = str(event.group_id)
+        # group_id = str(event.group_id)
         self._cancel_timeout_task(group_id)
-        task = asyncio.create_task(self._auto_settle_task(event))
+        task = asyncio.create_task(self._auto_settle_task(group_id))
         if group_id in self._current_player:
             self._current_player[group_id]["timeout_task"] = task
     # ====================================================
@@ -94,29 +92,6 @@ class RussianManager:
             last_signin = today - datetime.timedelta(days=1)
             signin_num = 0
         await UserDao.update_user_coins(user_id, user_name, new_coins, last_signin, signin_num)
-
-    async def benefit(self, event: GroupMessage) -> str:
-        group_id = str(event.group_id)
-        user_id = str(event.sender.user_id)
-        nickname = event.sender.nickname
-        self._init_player_data(group_id, user_id, nickname)
-        
-        if self._player_data[group_id][user_id].get("is_benefit"):
-            return "一分也没有了，爪捏..."
-            
-        current_coins = await self.get_db_coins(user_id)
-        if current_coins > 0:
-            return "带资本家别来抢穷哥们的饭碗啊！"
-
-        normal = 17 + 15 * (math.sqrt(-2*math.log(1.0-random.random()))*math.cos(2*math.pi*(1.0-random.random())))
-        gold = min(max(round(normal), 0), 80)
-
-        await self.add_db_coins(user_id, nickname, gold)
-        self._player_data[group_id][user_id]["make_gold"] += gold
-        self._player_data[group_id][user_id]["is_benefit"] = True
-        self.save()
-        
-        return random.choice(["\n又输完了，再给你一次机会吧...", "慢点输鸭，低保每天只有一次.", "复活吧，我的朋友！"]) + f"\n你总共获得了 {gold} 金币"
 
     async def ready_game(self, event: GroupMessage, bullet_num: int, money: int, at_qq: str = None) -> str:
         group_id = str(event.group_id)
@@ -192,7 +167,7 @@ class RussianManager:
         self._current_player[group_id]["last_active_time"] = datetime.datetime.now().timestamp()
 
         # 玩家成功接受后，正式开始真正的倒计时
-        self._start_timeout_task(event)
+        self._start_timeout_task(event.group_id)
 
         return f"{nickname}接受了对决！\n请[CQ:at,qq={self._current_player[group_id][1]}]在{self.timeout}秒内先开枪！"
 
@@ -222,7 +197,7 @@ class RussianManager:
             flag = _tmp.index(1) + 1
             await event.reply(f'"嘭！"，你直接去世了\n第 {current_index + flag} 发子弹送走了你...')
             await asyncio.sleep(0.5)
-            await self.end_game(event, is_timeout=False)
+            await self.end_game(event.group_id, is_timeout=False)
             return None
         else:
             next_user_id = current_game.get(1) if user_id == current_game.get(2) else current_game.get(2)
@@ -232,21 +207,22 @@ class RussianManager:
             self._current_player[group_id]["index"] += count
             
             # 玩家开枪没死，重新开始计时！把定时器交接给下一个人
-            self._start_timeout_task(event)
+            self._start_timeout_task(event.group_id)
             
             x = str(float(current_game.get("bullet_num")) / float(current_game.get("null_bullet_num") + current_game.get("bullet_num")) * 100)[:5]
             
             return f"呼呼，没有爆裂的声响，你活了下来\n下一枪中弹的概率：{x}%\n轮到 [CQ:at,qq={next_user_id}] 了！(请在{self.timeout}秒内开枪)"
 
-    async def end_game(self, event: GroupMessage, is_timeout=False):
-        group_id = str(event.group_id)
+    async def end_game(self, group_id: str, is_timeout=False):
+        # group_id = str(event.group_id)
         current_game = self._current_player.get(group_id, {})
         
         if not current_game.get(1):
             return
             
         # 结算前一定要先停掉潜在的倒计时任务
-        self._cancel_timeout_task(group_id)
+        if not is_timeout:
+            self._cancel_timeout_task(group_id)
             
         # 安全防抖：如果在还没人接受的情况下进到这里，直接静默清理
         if not current_game.get(2):
@@ -284,16 +260,15 @@ class RussianManager:
         bullet_str = "".join(["__ " if x == 0 else "| " for x in current_game.get("bullet", [])])
         self._current_player[group_id] = {}
         
-        await event.reply(
+
+        prefix = "⏳ 决斗已超时，系统自动强行结算...\n" if is_timeout else ""
+        msg = (
+            f"{prefix}"
             f"结算：\n\t胜者：{win_name}\n\t赢取金币：{gold - fee}\n\t累计胜场：{win_user['win_count']}\n"
             f"-------------------\n\t败者：{lose_name}\n\t输掉金币：{gold}\n\t累计败场：{lose_user['lose_count']}\n"
             f"-------------------\n从中收取了 {float(rand)}%({fee}金币) 作为手续费！\n子弹排列：{bullet_str[:-1]}"
         )
-
-    def reset_benefit(self):
-        for group in self._player_data.values():
-            for user in group.values():
-                user["is_benefit"] = False
-        self.save()
+        await status.global_api.post_group_msg(group_id=group_id, text=msg)
+        # await event.reply(msg)
 
 russian_manager = RussianManager()

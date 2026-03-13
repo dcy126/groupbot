@@ -85,33 +85,17 @@ class Hachimi(NcatBotPlugin):
     
     @group_filter
     @command_registry.command("装弹", description="开启决斗", aliases=["俄罗斯轮盘", "俄罗斯转盘"])
-    async def russian_start(self, event: GroupMessage,bullet_num: int,money: int,user: At):
-        # 解析参数，例如：装弹 1 200 [CQ:at,qq=12345]
-        # parts = event.raw_message.split()
-        # bullet_num = 1
-        # money = 200
-        # at_qq = None
-        
-        # for part in parts[1:]:
-        #     if part.isdigit():
-        #         val = int(part)
-        #         if 1 <= val <= 6:
-        #             bullet_num = val
-        #         else:
-        #             money = val
-        #     elif "CQ:at" in part:
-        #         match = re.search(r'qq=(\d+)', part)
-        #         if match:
-        #             at_qq = match.group(1)
-                    
-        msg = await russian_manager.ready_game(event, bullet_num, money, user.qq)
+    async def russian_start(self, event: GroupMessage,bullet_num: int,money: int,user: At = None):
+        qq=user.qq if user else None
+        # 解析参数，例如：装弹 1 200 [CQ:at,qq=12345]   
+        msg = await russian_manager.ready_game(event, bullet_num, money, qq)
         await event.reply(msg)
 
     @group_filter
     @command_registry.command("接受对决", description="接受决斗", aliases=["接受决斗", "接受挑战"])
     async def russian_accept(self, event: GroupMessage):
         msg = await russian_manager.accept(event)
-        await event.reply(f"[CQ:at,qq={event.sender.user_id}] {msg}")
+        await event.reply(msg)
 
     @group_filter
     @command_registry.command("开枪", description="开枪射击", aliases=["咔", "嘭", "嘣"])
@@ -123,7 +107,6 @@ class Hachimi(NcatBotPlugin):
         if msg:
             await event.reply(msg)
 
-
     @group_filter
     @command_registry.command("我的战绩", description="查看俄罗斯轮盘战绩")
     async def russian_record(self, event: GroupMessage):
@@ -131,7 +114,7 @@ class Hachimi(NcatBotPlugin):
         user_id = str(event.sender.user_id)
         if group_id in russian_manager._player_data and user_id in russian_manager._player_data[group_id]:
             user = russian_manager._player_data[group_id][user_id]
-            msg = (f"[CQ:at,qq={user_id}]\n俄罗斯轮盘\n"
+            msg = (f"俄罗斯轮盘\n"
                    f"胜利场次：{user['win_count']}\n"
                    f"失败场次：{user['lose_count']}\n"
                    f"赚取金币：{user['make_gold']}\n"
